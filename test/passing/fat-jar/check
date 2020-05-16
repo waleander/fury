@@ -1,0 +1,34 @@
+Initialized an empty layer
+Set current project to scala
+Set current module to compiler
+Set current project to bar
+Setting default compiler for project bar to scala/compiler
+Set current module to app
+e36c63fb9ddb0d9027f4e634bd6440182ffdf4e338677debeda2634d3a81ae5a
+3ec0e1fb27a66a480065ccbf94030af08b66f3b70cb6e2bdc45d151b0c247085
+Starting the BSP launcher...
+Opening a BSP server connection
+BSP server is listening for incoming connections
+Starting compilation of module bar/app
+Successfully compiled module bar/app
+Hello World
+Saving JAR file out/bar-app.jar using UTF-8
+Wrote 18.8 MiB to out/bar-app.jar
+0
+bar-app.jar
+scala/math/Ordering$OptionOrdering.class
+scala/Option$.class
+scala/Option$WithFilter.class
+scala/Option.class
+scala/tools/nsc/doc/base/comment/ColumnOption$.class
+scala/tools/nsc/doc/base/comment/ColumnOption.class
+HelloWorld$.class
+HelloWorld$delayedInit$body.class
+HelloWorld.class
+Hello World
+0
+Manifest-Version: 1.0
+Class-Path: scala-compiler-2.12.8.jar scala-library-2.12.8.jar scala-re
+ flect-2.12.8.jar scala-xml_2.12-1.0.6.jar
+Created-By: Fury
+Main-Class: HelloWorld

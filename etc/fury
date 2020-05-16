@@ -1,0 +1,151 @@
+#!/bin/bash
+
+if [ "$(uname -s)" = 'Linux' ]; then
+  DEFAULT_FURY_HOME="$(realpath $(dirname "$(readlink -f "$0")")/..)"
+else
+  DEFAULT_FURY_HOME="$(cd "$(dirname "$0")"/.. && pwd -P)"
+fi
+
+if [ "$XDG_RUNTIME_DIR" = "" ]; then
+  SCRIPT_DIR="/tmp/scripts"
+else
+  SCRIPT_DIR="$XDG_RUNTIME_DIR/scripts"
+fi
+
+ARGS="$@"
+DEFAULT_PORT="8462"
+PORT="${FURY_PORT:-$DEFAULT_PORT}"
+FHOME="${FURY_HOME:-$DEFAULT_FURY_HOME}"
+CLASSPATH="$FHOME/lib/fury.jar"
+MAIN="com.facebook.nailgun.NGServer"
+FURY_MAIN="fury.FuryServer"
+QUIET='0'
+UPGRADEDIR="$FHOME/upgrade"
+
+trap cleanup INT HUP TERM
+
+cleanup() {
+  fury interrupt
+  printf "\e[0m\e[?25h"
+}
+
+nailgun() {
+  if ! sh -c "${FHOME}/bin/ng --nailgun-version > /dev/null 2>&1" || [[ "1" -eq "$USE_NG_PY" ]] ; then 
+	"${FHOME}"/bin/ng.py --nailgun-port "$PORT" "$1" -- "${@:2}"
+  else
+  	if [ -f "${FHOME}/bin/libprocname.so" ]; then
+		LD_PRELOAD="${FHOME}/bin/libprocname.so" "${FHOME}"/bin/ng --nailgun-port "$PORT" "$1" "${@:2}"
+	else
+		"${FHOME}"/bin/ng --nailgun-port "$PORT" "$1" "${@:2}"
+	fi
+  fi
+}
+
+message() {
+  if [ "$QUIET" = "0" ]; then
+    printf "$1"
+  fi
+}
+
+coursier() {
+  "${FHOME}/bin/coursier" "$@"
+}
+
+stopFury() {
+  nailgun "${FURY_MAIN}" "$$" "stop" 2> /dev/null
+  case "$?" in
+    0)   nailgun ng-stop ;;
+    230) echo "Fury is not running." && exit 1 ;;
+    *)   exit 1 ;;
+  esac
+}
+
+alive() {
+  bash -c "(exec 6<> /dev/tcp/127.0.0.1/${PORT})" > /dev/null 2> /dev/null
+}
+
+startNailgun() {
+  if [ -d "${UPGRADEDIR}" ]; then
+    source "${UPGRADEDIR}/bin/upgrade" && "${FHOME}/bin/fury" "$ARGS"
+    exit $?
+  else
+    if [ "$1" = "prompt" ]; then
+      message 'Starting Fury daemon...'
+    fi
+    if [ -f "${FHOME}/bin/libprocname.so" ]; then
+	LD_PRELOAD="${FHOME}/bin/libprocname.so" java -Dfile.encoding=UTF-8 -Dfury.home="${FHOME}" -cp "$CLASSPATH" Fury "$PORT" > /dev/null &
+    else
+	java -Dfile.encoding=UTF-8 -Dfury.home="${FHOME}" -cp "$CLASSPATH" Fury "$PORT" > /dev/null &
+    fi
+    until (alive); do
+      if [ "$1" = "prompt" ]; then
+        message '.'
+      fi
+      sleep 0.1
+    done
+    if [ "$1" = "prompt" ]; then
+      message 'done\n'
+    fi
+  fi
+}
+
+ngServer() {
+  alive || startNailgun
+}
+
+fury() {
+  ngServer && nailgun "${FURY_MAIN}" "$$" "$@"
+  EXIT="$?"
+  case "$EXIT" in
+    0|1)
+      exit "$EXIT"
+      ;;
+    91)
+      source "${SCRIPT_DIR}/exec_$$"
+      rm "${SCRIPT_DIR}/exec_$$"
+      ;;
+  esac
+}
+
+restartFury() {
+  stopFury && ngServer
+}
+
+startFuryStandalone() {
+  java -Dfury.home="${FHOME}" -cp "$CLASSPATH" "$FURY_MAIN" "$$" "$@"
+}
+
+case "$1" in
+  "start")
+    ngServer
+    ;;
+  "standalone")
+    startFuryStandalone "${@:2}"
+    ;;
+  "stop")
+    stopFury
+    ;;
+  "upgrade")
+    fury "$@"
+    killall fury > /dev/null
+    ;;
+  "restart")
+    restartFury
+    ;;
+  "prompt")
+    fury "$@" || printf " %{\e[0;30m%}[ ]"
+    ;;
+  "completion")
+    QUIET=1
+    fury "$@" || printf "1:Command:((start:'start the Fury daemon'))\n"
+    ;;
+  "--help")
+    fury "help"
+    ;;
+  *)
+    fury "$@"
+    res=$?
+    exit $res
+    ;;
+esac
+

@@ -1,0 +1,59 @@
+name: Build
+
+on: [push, pull_request]
+
+jobs:
+  build:
+
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+      fail-fast: false
+
+    steps:
+    - uses: actions/checkout@v2.0.0
+    - run: git fetch --prune --unshallow
+    - name: Run Makefile
+      run: |
+        git describe --tags
+        make install
+      timeout-minutes: 10
+    - name: Package compilation logs
+      if: failure()
+      run: find ~/.cache/fury -type f -name '*.log' | tar cvzf compilation-logs.tar.gz --files-from -
+    - uses: actions/upload-artifact@v1.0.0
+      with:
+        name: compilation-logs-${{ runner.os }}
+        path: compilation-logs.tar.gz
+      if: failure()
+    - name: Run unit tests
+      run: |
+        make -k test || touch unittests.failed
+        ! ls -1 unittests.failed 2> /dev/null
+      timeout-minutes: 5
+    - name: Prepare environment for integration tests
+      run: |
+        git config --global user.name 'Github Actions'
+        git config --global user.email github.actions@propensive.com
+        echo "::add-path::$HOME/.local/share/fury/usr/$(head -n1 tmp/.version)/bin"
+      timeout-minutes: 1
+    - name: Run integration tests
+      run: |
+        etc/integration || touch integration.failed
+        ! ls -1 integration.failed 2> /dev/null
+      timeout-minutes: 10
+    - name: Package logs
+      if: failure()
+      run: find ~/.cache/fury -type f -name '*.log' | tar cvzf logs.tar.gz --files-from -
+    - uses: actions/upload-artifact@v1.0.0
+      with:
+        name: logs-${{ runner.os }}
+        path: logs.tar.gz
+      if: failure()
+    - name: Inspect cache
+      if: contains(runner.os, 'ubuntu')
+      run: du -h ~/.cache/fury --max-depth 2        
+    - name: Summary
+      run: |
+        ! ls -1 *.failed 2> /dev/null

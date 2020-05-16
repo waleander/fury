@@ -1,0 +1,13 @@
+if not contains $FURYHOME/bin $fish_user_paths
+  set -Ux fish_user_paths $fish_user_paths\ $FURYHOME/bin
+end
+
+# FIXME: Need to include fish completions
+
+if set -q XDG_CONFIG_HOME
+  set CONFIG "${XDG_CONFIG_HOME}/fury"
+else
+  set CONFIG "${HOME}/.config/fury"
+end
+
+source "${CONFIG}/aliases"

@@ -1,0 +1,23 @@
+Initialized an empty layer
+Set current project to scala
+Set current module to compiler
+Set current project to library
+Setting default compiler for project library to scala/compiler
+Set current module to core
+0
+IPFS ref: fury://QmTbRCxBkeAF9NzS24LyoC7iDsSFsuB46EHRiWHUZyiG16
+Initialized an empty layer
+Checking that no modules reference local sources
+Checking that no project names conflict
+Checking that all module references resolve
+platform
+path	/platform
+Layer name .. not found.
+1
+path	/platform
+Layer name /.. not found.
+1
+path	/platform
+Layer name /platform/../.. not found.
+1
+path	/platform

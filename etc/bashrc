@@ -1,0 +1,12 @@
+export PATH="$PATH:$FURYHOME/bin:$FURYHOME/usr"
+
+# FIXME: Need to include bash completions
+
+if [ -z "${XDG_CONFIG_HOME}" ]
+then
+  CONFIG="${HOME}/.config/fury"
+else
+  CONFIG="${XDG_CONFIG_HOME}/fury"
+fi
+
+source "${CONFIG}/aliases"

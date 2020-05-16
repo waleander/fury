@@ -1,0 +1,76 @@
+mkdir app
+mkdir library
+mkdir platform1
+mkdir platform2
+
+cd library
+git init -q
+mkdir -p src/core
+echo 'object Constants { val x = "Hello World!" }' > src/core/constants.scala
+git add .
+git commit -m 'version 1' -q
+
+cd ../platform1
+git init -q
+echo '.fury' > .gitignore
+fury layer init
+fury schema add -n platform1
+fury project add -n scala
+fury module add -n compiler -t compiler
+fury module update -C scala-lang.org:scala-compiler:2.12.8
+fury binary add -b org.scala-lang:scala-compiler:2.12.8
+fury project add -n library
+fury module add -n core -c scala/compiler
+fury repo add -n library -u ../library
+fury source add -s library:src/core
+git add .
+git commit -m 'platform 1' -q
+fury build run --output linear
+echo $?
+IPFSREF_1=$(fury layer share --raw)
+
+cd ../library
+echo 'object Constants { val x = 123 }' > src/core/constants.scala
+git add .
+git commit -m 'version 2' -q
+
+cd ../platform2
+git init -q
+echo '.fury' > .gitignore
+fury layer init
+fury schema add -n platform2
+fury project add -n scala
+fury module add -n compiler -t compiler
+fury module update -C scala-lang.org:scala-compiler:2.12.8
+fury binary add -b org.scala-lang:scala-compiler:2.12.8
+fury project add -n library
+fury module add -n core -c scala/compiler
+fury repo add -n library -u ../library
+fury repo pull -r library
+fury source add -s library:src/core
+git add .
+git commit -m 'platform 2' -q
+fury build run --output linear
+echo $?
+IPFSREF_2=$(fury layer share --raw)
+
+cd ../app
+fury layer init
+fury layer import -i $IPFSREF_1 --name platform1 --import platform1
+fury layer import -i $IPFSREF_2 --name platform1 --import platform2
+IPFSREF_1=
+IPFSREF_2=
+fury project add -n hello-world
+fury module add -n app -c scala/compiler -t application -M HelloWorld
+fury dependency add -d library/core
+mkdir -p src/app
+fury source add -s src/app
+echo 'object HelloWorld extends App{ val y = Constants.x; println(y) }' > src/app/HelloWorld.scala
+fury permission require -C java.util.PropertyPermission -T scala.maven.version.number -A read
+fury permission require -C java.util.PropertyPermission -T scala.version.number -A read
+fury permission require -C java.util.PropertyPermission -T scala.time -A read
+fury permission require -C java.util.PropertyPermission -T scala.copyright.string -A read
+fury permission require -C java.util.PropertyPermission -T test.property -A read
+fury build run --output linear
+echo $?
+

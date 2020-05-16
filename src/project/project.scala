@@ -1,124 +1,132 @@
 /*
-  Fury, version 0.1.0. Copyright 2018 Jon Pretty, Propensive Ltd.
 
-  The primary distribution site is: https://propensive.com/
+    Fury, version 0.15.1. Copyright 2018-20 Jon Pretty, Propensive OÜ.
 
-  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
-  in compliance with the License. You may obtain a copy of the License at
+    The primary distribution site is: https://propensive.com/
 
-      http://www.apache.org/licenses/LICENSE-2.0
+    Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in
+    compliance with the License. You may obtain a copy of the License at
 
-  Unless required  by applicable  law or  agreed to  in writing,  software  distributed  under the
-  License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-  express  or  implied.  See  the  License for  the specific  language  governing  permissions and
-  limitations under the License.
-                                                                                                  */
+    http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software distributed under the License is
+    distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and limitations under the License.
+
+*/
 package fury
 
-import mitigation._
-import totalitarian._
+import fury.strings._, fury.io._, fury.core._, fury.model._
+
 import guillotine._
+import optometry._
+import mercator._
+import scala.util._
 
 import scala.collection.immutable.SortedSet
 
-object ProjectCli {
+case class ProjectCli(cli: Cli)(implicit log: Log) {
   import Args._
 
-  def context(cli: Cli[CliParam[_]]) = for {
-    layout       <- cli.layout
-    config       <- fury.Config.read()(cli.env, layout)
-    workspace    <- fury.Workspace.read(layout.furyConfig)(layout)
-    cli          <- cli.hint(SchemaArg, workspace.schemas)
-    optSchemaArg <- ~cli.peek(SchemaArg)
-  } yield new MenuContext(cli, layout, config, workspace, optSchemaArg)
+  def select: Try[ExitStatus] = for {
+    layout      <- cli.layout
+    conf        <- Layer.readFuryConf(layout)
+    layer       <- Layer.retrieve(conf)
+    cli         <- cli.hint(ProjectArg, layer.projects)
+    cli         <- cli.hint(ForceArg)
+    call        <- cli.call()
+    projectId   <- ~cli.peek(ProjectArg)
+    projectId   <- projectId.asTry
+    force       <- ~call(ForceArg).isSuccess
+    layer       <- ~(Layer(_.main)(layer) = Some(projectId))
+    _           <- Layer.commit(layer, conf, layout)
+  } yield log.await()
 
-  def select(ctx: MenuContext) = {
-    import ctx._
-    for { 
-      dSchema       <- workspace.schemas.findBy(optSchemaId.getOrElse(workspace.main))
-      cli           <- cli.hint(ProjectArg, dSchema.projects)
-      cli           <- cli.hint(ForceArg)
-      io            <- cli.io()
-      projectId     <- ~cli.peek(ProjectArg)
-      projectId     <- projectId.ascribe(UnspecifiedProject())
-      force         <- ~io(ForceArg).opt.isDefined
-      workspace     <- Lenses.updateSchemas(optSchemaId, workspace, force)(Lenses.workspace.mainProject(_))(_(_) = Some(projectId))
-      io            <- ~io.save(workspace, layout.furyConfig)
-    } yield io.await()
-  }
+  def list: Try[ExitStatus] = for {
+    layout      <- cli.layout
+    conf        <- Layer.readFuryConf(layout)
+    layer       <- Layer.retrieve(conf)
+    cli         <- cli.hint(ProjectArg, layer.projects)
+    cli         <- cli.hint(RawArg)
+    table       <- ~Tables().projects(layer.main)
+    cli         <- cli.hint(ColumnArg, table.headings.map(_.name.toLowerCase))
+    call        <- cli.call()
+    projectId   <- ~cli.peek(ProjectArg)
+    col         <- ~cli.peek(ColumnArg)
+    raw         <- ~call(RawArg).isSuccess
+    rows        <- ~layer.projects.to[List]
+    table       <- ~Tables().show(table, cli.cols, rows, raw, col, projectId, "project")
+    _           <- ~log.infoWhen(!raw)(conf.focus())
+    _           <- ~log.rawln(table)
+  } yield log.await()
 
-  def list(ctx: MenuContext) = {
-    import ctx._
-    for {
-      cols   <- Answer(Terminal.columns.getOrElse(100))
-      cli    <- cli.hint(RawArg)
-      io     <- cli.io()
-      raw    <- ~io(RawArg).successful
-      schema <- workspace.schemas.findBy(optSchemaId.getOrElse(workspace.main))
-      rows   <- ~schema.projects.to[List]
-      table  <- ~Tables(config).show(Tables(config).projects(schema.main), cols, rows, raw)(_.id)
-      io     <- ~(if(!raw) io.println(Tables(config).contextString(layout.pwd, workspace.showSchema, schema)) else io)
-      io     <- ~io.println(table.mkString("\n"))
-    } yield io.await()
-  }
+  def add: Try[ExitStatus] = for {
+    layout         <- cli.layout
+    conf           <- Layer.readFuryConf(layout)
+    layer          <- Layer.retrieve(conf)
+    cli            <- cli.hint(ProjectNameArg, List(layout.baseDir.name))
+    cli            <- cli.hint(LicenseArg, License.standardLicenses)
+    cli            <- cli.hint(DefaultCompilerArg, ModuleRef.JavaRef :: layer.compilerRefs(layout))
+    call           <- cli.call()
+    compilerId     <- ~cli.peek(DefaultCompilerArg)
+    
+    optCompilerRef <- compilerId.to[List].map { v =>
+                        ModuleRef.parseFull(v, true).ascribe(InvalidValue(v))
+                      }.sequence.map(_.headOption)
 
-  def add(ctx: MenuContext) = {
-    import ctx._
-    for {
-      cli       <- cli.hint(ProjectNameArg)
-      cli       <- cli.hint(LicenseArg, License.standardLicenses)
-      io        <- cli.io()
-      projectId <- io(ProjectNameArg)
-      license   <- io(LicenseArg).remedy(License.unknown)
-      project   <- ~fury.Project(projectId, license = license)
-      workspace <- Lenses.updateSchemas(optSchemaId, workspace, true)(Lenses.workspace.projects(_))(_.modify(_)((_: SortedSet[Project]) + project))
-      workspace <- Lenses.updateSchemas(optSchemaId, workspace, true)(Lenses.workspace.mainProject(_))(_(_) = Some(project.id))
-      io        <- ~io.save(workspace, layout.furyConfig)
-      io        <- ~io.println(msg"Set current project to ${project.id}")
-    } yield io.await()
-  }
+    projectArg     <- call(ProjectNameArg)
+    projectId      <- layer.projects.unique(projectArg)
+    license        <- Success(call(LicenseArg).toOption.getOrElse(License.unknown))
+    project        <- ~Project(projectId, license = license, compiler = optCompilerRef)
+    layer          <- ~Layer(_.projects).modify(layer)(_ + project)
+    layer          <- ~(Layer(_.main)(layer) = Some(project.id))
+    _              <- Layer.commit(layer, conf, layout)
+    _              <- ~log.info(msg"Set current project to ${project.id}")
+  } yield log.await()
 
-  def delete(ctx: MenuContext) = {
-    import ctx._
-    for {
-      dSchema   <- workspace.schemas.findBy(optSchemaId.getOrElse(workspace.main))
-      cli       <- cli.hint(ProjectArg, dSchema.projects)
-      cli       <- cli.hint(ForceArg)
-      io        <- cli.io()
-      projectId <- io(ProjectArg)
-      project   <- dSchema.projects.findBy(projectId)
-      force     <- ~io(ForceArg).opt.isDefined
-      workspace <- Lenses.updateSchemas(optSchemaId, workspace, force)(Lenses.workspace.projects(_))(_.modify(_)((_: SortedSet[Project]).filterNot(_.id == project.id)))
-      workspace <- Lenses.updateSchemas(optSchemaId, workspace, force)(Lenses.workspace.mainProject(_)) { (lens, ws) =>
-                     if(lens(ws) == Some(projectId)) (lens(ws) = None) else ws
-                   }
-      io        <- ~io.save(workspace, layout.furyConfig)
-    } yield io.await()
-  }
+  def remove: Try[ExitStatus] = for {
+    layout      <- cli.layout
+    conf        <- Layer.readFuryConf(layout)
+    layer       <- Layer.retrieve(conf)
+    cli         <- cli.hint(ProjectArg, layer.projects)
+    cli         <- cli.hint(ForceArg)
+    call        <- cli.call()
+    projectId   <- call(ProjectArg)
+    project     <- layer.projects.findBy(projectId)
+    force       <- ~call(ForceArg).isSuccess
+    layer       <- ~Layer(_.projects).modify(layer)(_.evict(project.id))
+    layer       <- ~Layer(_.main).modify(layer) { v => if(v == Some(projectId)) None else v }
+    _           <- Layer.commit(layer, conf, layout)
+  } yield log.await()
 
-  def update(ctx: MenuContext) = {
-    import ctx._
-    for {
-      dSchema        <- ~workspace.schemas.findBy(optSchemaId.getOrElse(workspace.main)).opt
-      cli            <- cli.hint(ProjectArg, dSchema.map(_.projects).getOrElse(Nil))
-      cli            <- cli.hint(DescriptionArg)
-      cli            <- cli.hint(ForceArg)
-      projectId      <- ~cli.peek(ProjectArg).orElse(dSchema.flatMap(_.main))
-      cli            <- cli.hint(LicenseArg, License.standardLicenses)
-      cli            <- cli.hint(ProjectNameArg, projectId)
-      io             <- cli.io()
-      projectId      <- projectId.ascribe(UnspecifiedProject())
-      schema         <- workspace.schemas.findBy(optSchemaId.getOrElse(workspace.main))
-      oldProject     <- schema.projects.findBy(projectId)
-      nameArg        <- ~io(ProjectNameArg).opt
-      newId          <- ~nameArg.flatMap(schema.unused(_).opt).getOrElse {
-                            oldProject.id }
-      licenseArg     <- io(LicenseArg).remedy(oldProject.license)
-      descriptionArg <- io(DescriptionArg).remedy(oldProject.description)
-      project        <- ~oldProject.copy(id = newId, license = licenseArg, description = descriptionArg)
-      force          <- ~io(ForceArg).opt.isDefined
-      workspace      <- Lenses.updateSchemas(optSchemaId, workspace, force)(Lenses.workspace.project(_, oldProject.id))(_(_) = project)
-      io             <- ~io.save(workspace, layout.furyConfig)
-    } yield io.await()
-  }
+  def update: Try[ExitStatus] = for {
+    layout         <- cli.layout
+    conf           <- Layer.readFuryConf(layout)
+    layer          <- Layer.retrieve(conf)
+    cli            <- cli.hint(ProjectArg, layer.projects)
+    cli            <- cli.hint(DescriptionArg)
+    cli            <- cli.hint(DefaultCompilerArg, ModuleRef.JavaRef :: layer.compilerRefs(layout))
+    cli            <- cli.hint(ForceArg)
+    projectId      <- ~cli.peek(ProjectArg).orElse(layer.main)
+    cli            <- cli.hint(LicenseArg, License.standardLicenses)
+    cli            <- cli.hint(ProjectNameArg, ProjectId(layout.baseDir.name) :: projectId.to[List])
+    call           <- cli.call()
+    projectId      <- projectId.asTry
+    project        <- layer.projects.findBy(projectId)
+    force          <- ~call(ForceArg).isSuccess
+    licenseArg     <- ~call(LicenseArg).toOption
+    layer          <- ~licenseArg.fold(layer)(Layer(_.projects(project.id).license)(layer) = _)
+    descriptionArg <- ~call(DescriptionArg).toOption
+    layer          <- ~descriptionArg.fold(layer)(Layer(_.projects(project.id).description)(layer) = _)
+    compilerArg    <- ~call(DefaultCompilerArg).toOption.flatMap(ModuleRef.parseFull(_, true))
+    layer          <- ~compilerArg.map(Some(_)).fold(layer)(Layer(_.projects(project.id).compiler)(layer) = _)
+    nameArg        <- ~call(ProjectNameArg).toOption
+    newId          <- ~nameArg.flatMap(layer.projects.unique(_).toOption)
+    layer          <- ~newId.fold(layer)(Layer(_.projects(project.id).id)(layer) = _)
+    
+    layer          <- if(newId.isEmpty || layer.main != Some(project.id)) ~layer
+                      else ~(Layer(_.main)(layer) = newId)
+
+    _              <- Layer.commit(layer, conf, layout)
+  } yield log.await()
 }

@@ -1,0 +1,26 @@
+Initialized an empty layer
+Set current project to scala
+Set current module to compiler
+Set current project to hello
+Setting default compiler for project hello to scala/compiler
+Set current module to core
+Set current module to app
+e36c63fb9ddb0d9027f4e634bd6440182ffdf4e338677debeda2634d3a81ae5a
+3ec0e1fb27a66a480065ccbf94030af08b66f3b70cb6e2bdc45d151b0c247085
+86dd1afef5ff30893a715c62702d27e2b479c2a32be773f000902f93e5bb0f6e
+Starting the BSP launcher...
+Opening a BSP server connection
+BSP server is listening for incoming connections
+Successfully compiled hello/app, hello/core
+Hello World!
+0
+Starting compilation of module hello/core
+[E] hello/core>local:src/core/constants.scala:1:20
+| not found: value va
+| object Constants { va x = "Hello World!" }
+Compilation of module hello/core failed
+One of the compile tasks failed. Check the logs for details.
+1
+Successfully compiled hello/app, hello/core
+Hello World!
+0

@@ -1,141 +1,143 @@
 /*
-  Fury, version 0.1.0. Copyright 2018 Jon Pretty, Propensive Ltd.
 
-  The primary distribution site is: https://propensive.com/
+    Fury, version 0.15.1. Copyright 2018-20 Jon Pretty, Propensive OÜ.
 
-  Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except
-  in compliance with the License. You may obtain a copy of the License at
+    The primary distribution site is: https://propensive.com/
 
-      http://www.apache.org/licenses/LICENSE-2.0
+    Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in
+    compliance with the License. You may obtain a copy of the License at
 
-  Unless required  by applicable  law or  agreed to  in writing,  software  distributed  under the
-  License is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either
-  express  or  implied.  See  the  License for  the specific  language  governing  permissions and
-  limitations under the License.
-                                                                                                  */
-package fury
+    http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing, software distributed under the License is
+    distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+    See the License for the specific language governing permissions and limitations under the License.
+
+*/
+package fury.core
+
+import fury.io._, fury.strings._, fury.model._, fury.utils._
 
 import guillotine._
-import mitigation._
-import kaleidoscope._
+import mercator._
+import euphemism._
 
-case class Shell()(implicit env: Environment) {
-  type Out = Result[String, ~ | ShellFailure]
- 
-  object git {
+import scala.util._
+import scala.collection.mutable.HashMap
+import java.util.UUID
+import java.util.jar.JarFile
+import java.util.zip.ZipFile
+import java.io._
 
-    def setRemote(repo: Repo): Out =
-      sh"git remote add origin ${repo.url}".exec[Out]
+import org.apache.commons.compress.archivers.zip.{ParallelScatterZipCreator, ZipArchiveEntry,
+    ZipArchiveOutputStream}
 
-    def clone(repo: Repo, dir: Path): Out =
-      sh"git clone ${repo.url} ${dir.value}".exec[Out]
+import java.util.zip.ZipInputStream
 
-    def cloneBare(repo: Repo, dir: Path): Out =
-      sh"git clone --bare ${repo.url} ${dir.value}".exec[Out]
+case class Shell(environment: Environment) {
+  implicit private[this] val defaultEnvironment: Environment = environment
 
-    def sparseCheckout(from: Path, dir: Path, sources: List[Path], commit: String): Result[String, ~ | ShellFailure | FileWriteError] = for {
-      _   <- sh"git -C ${dir.value} init".exec[Out]
-      _   <- sh"git -C ${dir.value} config core.sparseCheckout true".exec[Out]
-      _   <- (dir / "git" / "info" / "sparse-checkout").writeSync(sources.map(_.value).mkString("\n"))
-      _   <- sh"git -C ${dir.value} remote add origin ${from.value}".exec[Out]
-      str <- sh"git pull origin $commit".exec[Out]
-    } yield str
+  def runJava(classpath: List[String],
+              main: String,
+              securePolicy: Boolean,
+              env: Map[String, String],
+              properties: Map[String, String],
+              policy: Policy,
+              layout: Layout,
+              args: List[String],
+              noSecurity: Boolean)
+             (output: String => Unit)
+             : Running = {
+    layout.sharedDir.mkdir()
 
-    def checkout(dir: Path, commit: String): Out =
-      sh"git -C ${dir.value} checkout $commit".exec[Out]
+    implicit val defaultEnvironment: Environment =
+      Environment((environment.variables ++ env).updated("SHARED", layout.sharedDir.value), environment.workDir)
 
-    def init(dir: Path): Out =
-      sh"git -C ${dir.value} init".exec[Out]
+    val policyFile = Installation.policyDir.extant() / UUID.randomUUID().toString
+    policy.save(policyFile).get
 
-    def commit(dir: Path, message: String): Out =
-      sh"git -C ${dir.value} commit -m $message".exec[Out]
-
-    def add(dir: Path, paths: List[Path]): Out =
-      sh"git -C ${dir.value} add ${paths.map(_.value)}".exec[Out]
-
-    def status(dir: Path): Out =
-      sh"git -C ${dir.value} status --porcelain".exec[Out]
-
-    def pull(dir: Path, refspec: Option[RefSpec]): Out =
-      sh"git -C ${dir.value} pull origin ${refspec.to[List].map(_.id)}".exec[Out]
-
-    def push(dir: Path, all: Boolean): Out =
-      (if(all) sh"git -C ${dir.value} push --all" else sh"git push").exec[Out]
-
-    def tag(dir: Path, tag: String): Out =
-      sh"git -C ${dir.value} tag $tag".exec[Out]
-
-    def getCommitFromTag(dir: Path, tag: String): Out =
-      sh"git -C ${dir.value} rev-parse $tag".exec[Out]
-
-    def getCommit(dir: Path): Out =
-      sh"git -C ${dir.value} rev-parse --short HEAD".exec[Out]
-
-    def getRemote(dir: Path): Out =
-      sh"git -C ${dir.value} remote get-url origin".exec[Out]
-
-    def tags(dir: Path): Result[List[String], ~ | ShellFailure] = for {
-      output <- sh"git -C ${dir.value} tag -l".exec[Out]
-    } yield output.split("\n").to[List]
-  }
-
-  object bloop {
-    def start(): Running = {
-      sh"sh -c 'bloop server > /dev/null'".async(_ => (), _ => ())
-    }
+    val allProperties: Map[String, String] = {
+      val withPolicy = if(noSecurity) properties else
+          properties.updated("java.security.manager", "").updated("java.security.policy", policyFile.value)
       
-    def running(): Boolean = {
-      sh"ng --nailgun-port 8212 help".exec[Exit[String]].status == 0
+      withPolicy.updated("fury.sharedDir", layout.sharedDir.value)
     }
 
-    def run(name: String, watch: Boolean)(output: String => Unit): Running = {
-      val watchArg = if(watch) List("--watch") else Nil
-      sh"ng --nailgun-port 8212 run $name $watchArg".async(output(_), output(_))
-    }
+    val propArgs = allProperties.map { case (k, v) => if(v.isEmpty) str"-D$k" else str"-D$k=$v" }.to[List]
+
+    val classpathStr = classpath.mkString(":")
     
-    def clean(name: String)(output: String => Unit): Running =
-      sh"ng --nailgun-port 8212 clean $name".async(output(_), output(_))
+    val cmd =
+      if(securePolicy) sh"java $propArgs -cp $classpathStr $main $args"
+      else sh"java -Dfury.sharedDir=${layout.sharedDir.value} -cp ${classpath.mkString(":")} $main $args"
 
-    def compile(name: String, watch: Boolean)(output: String => Unit): Running = {
-      val watchArg = if(watch) List("--watch") else Nil
-      sh"ng --nailgun-port 8212 compile $name $watchArg".async(output(_), output(_))
-    }
-
-    def startServer(): Running =
-      sh"bloop server".async(_ => (), _ => ())
+    cmd.async(output(_), output(_))
   }
 
-  object coursier {
-    def fetch(artifact: String): Result[List[Path], ~ | ShellFailure] = for {
-      string <- sh"coursier fetch --repository central $artifact".exec[Out]
-    } yield string.split("\n").to[List].map(Path(_))
+  def javac(classpath: List[String], dest: String, sources: List[String]) =
+    sh"javac -cp ${classpath.mkString(":")} -d $dest $sources".exec[Try[String]]
+
+  def tryXdgOpen(url: Uri): Try[Unit] = {
+    Try(sh"xdg-open ${url.key}".exec[String])
+    Success(())
   }
 
-  private def jar(dest: Path, files: Set[(Path, List[String])], manifestFile: Path): Result[Unit, ~ | ShellFailure] =
-    sh"jar cmf ${manifestFile.value} ${dest.value}".exec[Out].map { str =>
-      val params = files.to[List].flatMap { case (path, files) => files.flatMap { file => List("-C", path.value, file) } }
-      sh"jar uf ${dest.value} $params".exec[Out]
-      ()
-    }
-  
-  def copyTo(src: Path, dest: Path): Result[Path, ~ | ShellFailure | FileWriteError] =
-    sh"cp -r ${src.value} ${dest.parent.value}/".exec[Out].map { _ => dest }
+  object java {
+    def ensureIsGraalVM(): Try[Unit] =
+      sh"sh -c 'java -version 2>&1'".exec[Try[String]].map(_.contains("GraalVM")).transform(
+        if(_) Success(()) else Failure(GraalVMError("non-GraalVM java")),
+        _ => Failure(GraalVMError("Could not check Java version"))
+      )
 
-  def aggregatedJar(dest: Path, files: Set[(Path, List[String])], manifestFile: Path)
-                   : Result[Unit, ~ | ShellFailure | FileWriteError] = for {
-    dir <- ~(dest.parent / "staging")
-    _   <- ~dir.mkdir()
-    _   <- ~(for((p, fs) <- files; f <- fs) copyTo(p / f, dir / f))
-    _   <- ~jar(dest, Set((dir, dir.children)), manifestFile)
-    _   <- dir.delete()
-  } yield ()
+    def ensureNativeImageInPath(): Try[Unit] =
+      Try(sh"native-image --help".exec[Try[String]]).fold(
+          _ => Failure(GraalVMError("This requires the native-image command to be on the PATH")),
+          _.map(_ => ())
+      )
+  }
 
-  object gpg {
-    def sign(file: Path, signed: Path, key: String): Out =
-      sh"gpg -a --output ${signed.value} --detach-sign ${file.value}".exec[Out]
+  private def shadowDuplicates(jarInputs: List[Path]): Try[Map[Path, Set[String]]] = {
+    jarInputs.traverse { path => Try {
+      val in = new FileInputStream(path.javaFile)
+      val zis = new ZipInputStream(in)
+      
+      val entries = Stream.continually(zis.getNextEntry).takeWhile(_ != null).map(_.getName).to[Set]
 
-    def keys(): Result[List[String], ~ | ShellFailure] = for {
-      output <- sh"gpg --list-secret-keys".exec[Out]
-    } yield output.split("\n").to[List].collect { case r"uid.*<$key@([^>]+)>.*" => key }
+      (path, entries)
+    } }.map(_.foldLeft((Set[String](), Map[Path, Set[String]]())) { case ((all, map), (path, entries)) =>
+      (all ++ entries, map.updated(path, entries -- all))
+    }._2)
+  }
+
+  def jar(dest: Path, jarInputs: Set[Path], pathInputs: Set[Path], manifest: JarManifest): Try[Unit] = {
+    val zos = new ZipArchiveOutputStream(dest.javaPath.toFile)
+    zos.setEncoding("UTF-8")
+    zos.putArchiveEntry(new ZipArchiveEntry(JarFile.MANIFEST_NAME))
+    zos.write(manifest.content.getBytes("UTF-8"))
+    zos.closeArchiveEntry()
+
+    val creator = new ParallelScatterZipCreator()
+    val result = for {
+      dups <- shadowDuplicates(jarInputs.to[List])
+      _    <- jarInputs.traverse { input => Zipper.pack(new ZipFile(input.javaFile), creator) { x =>
+                !x.getName.contains("META-INF") && !x.isDirectory && dups(input).contains(x.getName)
+              } }
+      _    <- pathInputs.traverse(Zipper.pack(_, creator))
+    } yield creator.writeTo(zos)
+    
+    zos.close()
+    
+    result
+  }
+
+  def native(dest: Path, classpath: List[String], main: String): Try[Unit] = {
+    implicit val defaultEnvironment: Environment = environment.copy(workDir = Some(dest.value))
+
+    for {
+      _  <- java.ensureNativeImageInPath
+      //_  <- java.ensureIsGraalVM()
+      cp  = classpath.mkString(":")
+      _  <- sh"native-image -cp $cp $main".exec[Try[String]].map(main.toLowerCase.waive)
+    } yield ()
   }
 }
